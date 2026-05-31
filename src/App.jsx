@@ -875,7 +875,7 @@ export default function App() {
             </button>
           </div>
           <div className="connection-info">
-            Connected to {BASE} · /llm_search · {tokenCount} tokens
+            Connected to render sever · /llm_search · {tokenCount} tokens
           </div>
         </div>
       </main>
