@@ -3,27 +3,27 @@ import React, { useCallback, useState, useEffect, useRef } from "react";
 import {
   Send,
   Menu,
-  Settings,
   LogOut,
   Trash2,
   Copy,
   ChevronsDown,
   EyeOff,
-  Eye
+  Eye,
 } from "lucide-react";
 
 import Markdown from "react-markdown";
 
 // =======================================================================
 
-const BASE = "http://localhost:8000";
+// const BASE = "https://quill-backend-0nt6.onrender.com";
+const BASE = "http://127.0.0.1:8000";
 
 export default function App() {
   // ========== STATE MANAGEMENT ==========
   const [messages, setMessages] = useState([]);
   const [inputValue, setInputValue] = useState("");
   const [isLoading, setIsLoading] = useState(false);
-  const [createNewSession, setcreateNewSession] = useState(true);
+  const [createNewSession, setCreateNewSession] = useState(true);
   const [currentChatId, setCurrentChatId] = useState(null);
   const [incognito, setIncognito] = useState(false);
   const [historyItems, setHistoryItems] = useState([]);
@@ -37,30 +37,25 @@ export default function App() {
   const [toast, setToast] = useState(null);
   const [tokenCount, setTokenCount] = useState(0);
   const [isMobile, setIsMobile] = useState(window.innerWidth < 768);
+  const [isLoggedIn, setIsLoggedIn] = useState(false);
+  const [username, setUsername] = useState("");
+  const [isSignupMode, setIsSignupMode] = useState(false);
 
   const messagesEndRef = useRef(null);
   const textareaRef = useRef(null);
+  const autoLoginAttempted = useRef(false);
 
   // ========== UTILITY FUNCTIONS ==========
 
-  /**
-   * Shows a toast notification (auto-dismisses after 4 seconds)
-   */
   const showToast = (message, type = "error") => {
     setToast({ message, type });
-    Quill(() => setToast(null), 4000);
+    setTimeout(() => setToast(null), 4000);
   };
 
-  /**
-   * Auto-scrolls to the latest message
-   */
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   };
 
-  /**
-   * Adjusts textarea height dynamically
-   */
   const adjustTextareaHeight = () => {
     if (textareaRef.current) {
       textareaRef.current.style.height = "auto";
@@ -69,32 +64,15 @@ export default function App() {
     }
   };
 
-  /**
-   * Copies endpoint to clipboard
-   */
   const copyToClipboard = (text) => {
     navigator.clipboard.writeText(text);
     showToast("Copied to clipboard!", "success");
   };
 
-  /**
-   * Handles responsive sidebar on mobile
-   */
-  useEffect(() => {
-    const handleResize = () => {
-      setIsMobile(window.innerWidth < 768);
-      if (window.innerWidth >= 768) {
-        setSidebarOpen(true);
-      }
-    };
-    window.addEventListener("resize", handleResize);
-    return () => window.removeEventListener("resize", handleResize);
-  }, []);
-
   // ============================================= API CALLS ========================================
 
   /**
-   ========== Health check - verifies API connection ==========
+   * Health check - verifies API connection
    */
   const checkHealth = useCallback(async () => {
     try {
@@ -106,34 +84,36 @@ export default function App() {
   }, []);
 
   /**
-   *==========Fetches chat history on page load ==========
+   * Fetches chat history on page load
    */
   const fetchChatHistory = useCallback(async () => {
+    if (!isLoggedIn) return;
+
     try {
       const response = await fetch(`${BASE}/list_chats`);
       if (!response.ok) throw new Error("Failed to fetch chats");
       const data = await response.json();
+      console.log(data);
 
-      // Convert folder names to chat history items
-      const chatItems = Array.isArray(data)
-        ? data.map((folder, idx) => ({
-            id: folder,
-            title:
-              folder.replace(/chat_|_/g, " ").substring(0, 40) +
-              (folder.length > 40 ? "…" : ""),
-            updated_at: Date.now() - idx * 3600000,
-          }))
-        : [];
-
-      setHistoryItems(chatItems);
-      setApiStatus((prev) => ({ ...prev, listChats: true }));
+      if (data.success && Array.isArray(data.conversations)) {
+        const chatItems = data.conversations.map((convName, idx) => ({
+          id: convName,
+          title:
+            convName.replace(/chat_|_/g, " ").substring(0, 40) +
+            (convName.length > 40 ? "…" : ""),
+          updated_at: Date.now() - idx * 3600000,
+        }));
+        setHistoryItems(chatItems);
+        setApiStatus((prev) => ({ ...prev, listChats: true }));
+      } else if (data.error) {
+        console.error("Error:", data.error);
+        setApiStatus((prev) => ({ ...prev, listChats: false }));
+      }
     } catch (error) {
       console.error("Error fetching chat history:", error);
-      // Use dummy data if API fails
-
       setApiStatus((prev) => ({ ...prev, listChats: false }));
     }
-  }, []);
+  }, [isLoggedIn]);
 
   /**
    * Fetches conversation messages by conversation name
@@ -145,36 +125,38 @@ export default function App() {
       const response = await fetch(`${BASE}/get_conv?${params}`);
       if (!response.ok) throw new Error("Failed to fetch conversation");
       const data = await response.json();
-      console.log(typeof data);
-
-      // Parse the conversation format: array of objects with role and content
-      // Filter out "previousChatSummerized" role (only needed for backend context)
-      const formattedMessages = [];
-      if (Array.isArray(data)) {
-        data.forEach((msg) => {
-          // Skip the summarized context - it's only for backend
-          if (msg.role === "previousChatSummerized") {
-            return;
-          }
-
-          // Map user and ai messages to the format expected by the chat window
-          if (msg.role === "user" || msg.role === "ai") {
-            formattedMessages.push({
-              role: msg.role,
-              content: msg.content,
-              ts: new Date().toISOString(),
-              // Preserve additional fields if present
-              ask_type: msg.ask_type || undefined,
-              source: msg.source || undefined,
-            });
-          }
-        });
+      if (!data) {
+        throw new Error("No data returned from server");
       }
 
-      setMessages(formattedMessages);
-      setCurrentChatId(convName);
-      setApiStatus((prev) => ({ ...prev, getConv: true }));
-      setcreateNewSession(false);
+      if (data.success && data.conversation) {
+        const formattedMessages = [];
+        const conversation = data.conversation;
+
+        if (conversation.messages && Array.isArray(conversation.messages)) {
+          conversation.messages.forEach((msg) => {
+            const role = msg.role === "assistant" ? "ai" : msg.role;
+
+            if (role === "user" || role === "ai") {
+              formattedMessages.push({
+                role: role,
+                content: msg.content,
+                ts: msg.timestamp || new Date().toISOString(),
+                sources: msg.sources,
+              });
+            }
+          });
+        }
+
+        setMessages(formattedMessages);
+        setCurrentChatId(convName);
+        setCreateNewSession(false);
+        setApiStatus((prev) => ({ ...prev, getConv: true }));
+      } else if (data.error) {
+        throw new Error(data.error);
+      } else {
+        throw new Error("Invalid response format");
+      }
     } catch (error) {
       console.error("Error fetching conversation:", error);
       showToast("Failed to load conversation");
@@ -206,23 +188,51 @@ export default function App() {
         search_type: "ask",
         incognito: incognito,
         createNewSession: createNewSession,
+        convname: "",
       });
+
       if (currentChatId) {
         params.set("convname", currentChatId);
       }
+
       const response = await fetch(`${BASE}/llm_search?${params}`);
       if (!response.ok) throw new Error("Failed to get response");
 
       const data = await response.json();
-      console.log(data);
+      console.log("Response:", data);
 
-      // Handle response format: either [model_res, conv_context] or just model_res
-      const modelRes = Array.isArray(data) ? data[0] : data;
-      const aiContent =
-        modelRes.reponse ||
-        modelRes.response ||
-        "I couldn't generate a response.";
-      const resolvedChatId = modelRes.convname || currentChatId;
+      let aiContent = "";
+      let resolvedChatId = currentChatId;
+
+      // Handle error responses
+      if (data.error) {
+        throw new Error(data.error);
+      }
+
+      // Handle new session response
+      if (createNewSession && data.response) {
+        const responseContent = data.response.response || data.response;
+        aiContent =
+          typeof responseContent === "string"
+            ? responseContent
+            : JSON.stringify(responseContent);
+        resolvedChatId = data.conversation_name;
+        setCreateNewSession(false);
+      }
+      // Handle existing session response
+      else if (data.response) {
+        aiContent =
+          typeof data.response === "string"
+            ? data.response
+            : JSON.stringify(data.response);
+        resolvedChatId = data.conversation_name || currentChatId;
+      }
+      // Handle string response (incognito)
+      else if (typeof data === "string") {
+        aiContent = data;
+      } else {
+        aiContent = JSON.stringify(data);
+      }
 
       const aiMessage = {
         role: "ai",
@@ -245,25 +255,30 @@ export default function App() {
         await new Promise((resolve) => setTimeout(resolve, 30));
       }
 
-      // Keep the resolved chat id in sync with the backend response
+      // Update chat ID if new session was created
       if (resolvedChatId !== currentChatId) {
         setCurrentChatId(resolvedChatId);
-        setcreateNewSession(false);
-        // Refresh chat history after the chat id is resolved
         await fetchChatHistory();
       }
 
       setApiStatus((prev) => ({ ...prev, llmSearch: true }));
     } catch (error) {
       console.error("Error sending message:", error);
-      showToast("Failed to send message. Check API connection.");
+      showToast(
+        error.message || "Failed to send message. Check API connection.",
+      );
       setApiStatus((prev) => ({ ...prev, llmSearch: false }));
-      // Remove the last empty AI message on error
       setMessages((prev) => prev.slice(0, -1));
     } finally {
       setIsLoading(false);
     }
-  }, [inputValue, currentChatId, fetchChatHistory]);
+  }, [
+    inputValue,
+    currentChatId,
+    incognito,
+    createNewSession,
+    fetchChatHistory,
+  ]);
 
   /**
    * Starts a new chat session
@@ -273,28 +288,110 @@ export default function App() {
     setCurrentChatId(null);
     setInputValue("");
     setTokenCount(0);
+    setCreateNewSession(true);
     adjustTextareaHeight();
-    setcreateNewSession(true);
   };
 
   /**
    * Deletes a chat from history
    */
-  const deleteChat = (chatId) => {
-    setHistoryItems((prev) => prev.filter((chat) => chat.id !== chatId));
-    if (currentChatId === chatId) {
-      startNewChat();
+  const deleteChat = async (chatId) => {
+    try {
+      const response = await fetch(`${BASE}/delete_msg?conv_name=${chatId}`);
+      const data = await response.json();
+
+      if (data.success) {
+        setHistoryItems((prev) => prev.filter((chat) => chat.id !== chatId));
+        if (currentChatId === chatId) {
+          startNewChat();
+        }
+        showToast("Conversation deleted successfully", "success");
+      } else {
+        showToast(data.error || "Failed to delete conversation");
+      }
+    } catch (error) {
+      console.error("Error deleting conversation:", error);
+      showToast("Error deleting conversation: " + error.message);
     }
+  };
+
+  /**
+   * Login user
+   */
+  const handleLogin = async (user, password) => {
+    try {
+      const response = await fetch(`${BASE}/login_user`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ username: user, password: password }),
+      });
+      const data = await response.json();
+
+      if (data.success) {
+        setIsLoggedIn(true);
+        setUsername(user);
+        showToast("Logged in successfully!", "success");
+      } else {
+        showToast(data.error || "Login failed");
+      }
+    } catch (error) {
+      showToast("Login error: " + error.message);
+    }
+  };
+
+  /**
+   * Sign up user
+   */
+  const handleSignUp = async (username, email, age, phone, password) => {
+    try {
+      const response = await fetch(`${BASE}/create_New_User`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          username: username,
+          user_email: email,
+          user_age: age,
+          user_phone: phone,
+          password: password,
+        }),
+      });
+      const data = await response.json();
+
+      if (data.success) {
+        showToast("Account created successfully! Please login.", "success");
+        setIsSignupMode(false);
+      } else {
+        showToast(data.error || "Sign up failed");
+      }
+    } catch (error) {
+      showToast("Sign up error: " + error.message);
+    }
+  };
+
+  /**
+   * Logout user
+   */
+  const handleLogout = () => {
+    setIsLoggedIn(false);
+    setUsername("");
+    setMessages([]);
+    setHistoryItems([]);
+    setCurrentChatId(null);
+    setCreateNewSession(true);
+    showToast("Logged out successfully!", "success");
   };
 
   // ========== LIFECYCLE EFFECTS ==========
 
   useEffect(() => {
     checkHealth();
-    fetchChatHistory();
-    const interval = setInterval(checkHealth, 10000); // Check health every 10s
+    const interval = setInterval(checkHealth, 10000);
     return () => clearInterval(interval);
-  }, [checkHealth, fetchChatHistory]);
+  }, [checkHealth]);
 
   useEffect(() => {
     scrollToBottom();
@@ -302,6 +399,34 @@ export default function App() {
 
   useEffect(() => {
     adjustTextareaHeight();
+  }, []);
+
+  useEffect(() => {
+    const handleResize = () => {
+      setIsMobile(window.innerWidth < 768);
+      if (window.innerWidth >= 768) {
+        setSidebarOpen(true);
+      }
+    };
+    window.addEventListener("resize", handleResize);
+    return () => window.removeEventListener("resize", handleResize);
+  }, []);
+
+  useEffect(() => {
+    if (isLoggedIn) {
+      fetchChatHistory();
+    }
+  }, [isLoggedIn, fetchChatHistory]);
+
+  // Auto-login on /test route
+  useEffect(() => {
+    const attemptAutoLogin = async () => {
+      if (window.location.pathname === "/test" && !autoLoginAttempted.current) {
+        autoLoginAttempted.current = true;
+        await handleLogin("anirban", "hellohi123");
+      }
+    };
+    attemptAutoLogin();
   }, []);
 
   // ========== EVENT HANDLERS ==========
@@ -326,26 +451,6 @@ export default function App() {
   // ========== COMPONENT: CODE BLOCK WITH COPY BUTTON ==========
 
   const renderCodeBlock = (content) => {
-    const codeBlockRegex = /```([\s\S]*?)```/g;
-    const parts = [];
-    let lastIndex = 0;
-    let match;
-
-    while ((match = codeBlockRegex.exec(content)) !== null) {
-      if (match.index > lastIndex) {
-        parts.push({
-          type: "text",
-          value: content.slice(lastIndex, match.index),
-        });
-      }
-      parts.push({ type: "code", value: match[1].trim() });
-      lastIndex = match.index + match[0].length;
-    }
-
-    if (lastIndex < content.length) {
-      parts.push({ type: "text", value: content.slice(lastIndex) });
-    }
-
     return (
       <Markdown
         components={{
@@ -398,6 +503,7 @@ export default function App() {
 
   const EmptyState = () => (
     <div className="empty-state">
+      <div className="empty-logo-wrap">💬</div>
       <h2 className="empty-title">lets Cook</h2>
       <div className="suggestions">
         {[
@@ -417,7 +523,158 @@ export default function App() {
     </div>
   );
 
-  // ========== RENDER ==========
+  // ========== COMPONENT: LOGIN FORM ==========
+
+  const LoginForm = () => {
+    const [loginUsername, setLoginUsername] = useState("");
+    const [loginPassword, setLoginPassword] = useState("");
+    const [signupUsername, setSignupUsername] = useState("");
+    const [signupEmail, setSignupEmail] = useState("");
+    const [signupAge, setSignupAge] = useState("");
+    const [signupPhone, setSignupPhone] = useState("");
+    const [signupPassword, setSignupPassword] = useState("");
+    const [signupConfirmPassword, setSignupConfirmPassword] = useState("");
+
+    const handleLoginSubmit = (e) => {
+      e.preventDefault();
+      if (loginUsername && loginPassword) {
+        handleLogin(loginUsername, loginPassword);
+      }
+    };
+
+    const handleSignupSubmit = (e) => {
+      e.preventDefault();
+      if (
+        signupUsername &&
+        signupEmail &&
+        signupAge &&
+        signupPhone &&
+        signupPassword &&
+        signupConfirmPassword
+      ) {
+        if (signupPassword !== signupConfirmPassword) {
+          showToast("Passwords do not match");
+          return;
+        }
+        handleSignUp(
+          signupUsername,
+          signupEmail,
+          signupAge,
+          signupPhone,
+          signupPassword,
+        );
+      }
+    };
+
+    return (
+      <div className="app-container">
+        <div className="login-container">
+          <div className="login-card">
+            {!isSignupMode ? (
+              <>
+                <h1>Quill</h1>
+                <p>Welcome back</p>
+                <form onSubmit={handleLoginSubmit}>
+                  <input
+                    type="text"
+                    placeholder="Username"
+                    value={loginUsername}
+                    onChange={(e) => setLoginUsername(e.target.value)}
+                    required
+                  />
+                  <input
+                    type="password"
+                    placeholder="Password"
+                    value={loginPassword}
+                    onChange={(e) => setLoginPassword(e.target.value)}
+                    required
+                  />
+                  <button type="submit">Login</button>
+                </form>
+                <p className="signup-prompt">
+                  New in Quill?{" "}
+                  <button
+                    type="button"
+                    className="signup-link"
+                    onClick={() => setIsSignupMode(true)}
+                  >
+                    Sign up
+                  </button>
+                </p>
+              </>
+            ) : (
+              <>
+                <h1>Quill</h1>
+                <p>Create your account</p>
+                <form onSubmit={handleSignupSubmit}>
+                  <input
+                    type="text"
+                    placeholder="Username"
+                    value={signupUsername}
+                    onChange={(e) => setSignupUsername(e.target.value)}
+                    required
+                  />
+                  <input
+                    type="email"
+                    placeholder="Email"
+                    value={signupEmail}
+                    onChange={(e) => setSignupEmail(e.target.value)}
+                    required
+                  />
+                  <input
+                    type="number"
+                    placeholder="Age"
+                    value={signupAge}
+                    onChange={(e) => setSignupAge(e.target.value)}
+                    required
+                  />
+                  <input
+                    type="tel"
+                    placeholder="Phone"
+                    value={signupPhone}
+                    onChange={(e) => setSignupPhone(e.target.value)}
+                    required
+                  />
+                  <input
+                    type="password"
+                    placeholder="Password"
+                    value={signupPassword}
+                    onChange={(e) => setSignupPassword(e.target.value)}
+                    required
+                  />
+                  <input
+                    type="password"
+                    placeholder="Confirm Password"
+                    value={signupConfirmPassword}
+                    onChange={(e) => setSignupConfirmPassword(e.target.value)}
+                    required
+                  />
+                  <button type="submit">Sign Up</button>
+                </form>
+                <p className="signup-prompt">
+                  Already have an account?{" "}
+                  <button
+                    type="button"
+                    className="signup-link"
+                    onClick={() => setIsSignupMode(false)}
+                  >
+                    Login
+                  </button>
+                </p>
+              </>
+            )}
+          </div>
+        </div>
+        {toast && <div className={`toast ${toast.type}`}>{toast.message}</div>}
+      </div>
+    );
+  };
+
+  // ========== MAIN RENDER ==========
+
+  if (!isLoggedIn) {
+    return <LoginForm />;
+  }
 
   return (
     <div className="app-container">
@@ -471,20 +728,19 @@ export default function App() {
         {/* Bottom Section - Account */}
         <div className="sidebar-bottom">
           <div className="account-info">
-            <div className="avatar">AB</div>
+            <div className="avatar">
+              {username.substring(0, 2).toUpperCase()}
+            </div>
             {sidebarOpen && (
               <div className="account-details">
-                <div className="account-name">Alex Burman</div>
+                <div className="account-name">{username}</div>
                 <div className="account-role">Pro Plan</div>
               </div>
             )}
           </div>
           {sidebarOpen && (
             <div className="account-actions">
-              <button title="Settings">
-                <Settings size={16} />
-              </button>
-              <button title="Logout">
+              <button title="Logout" onClick={handleLogout}>
                 <LogOut size={16} />
               </button>
             </div>
@@ -563,6 +819,7 @@ export default function App() {
                       : "message msg-ai-wrapper"
                   }
                 >
+                  {msg.role === "ai" && <div className="msg-ai-header"></div>}
                   <div
                     className={
                       msg.role === "user"
@@ -592,7 +849,7 @@ export default function App() {
                 value={inputValue}
                 onChange={handleInputChange}
                 onKeyDown={handleKeyDown}
-                placeholder="Ask  anything…"
+                placeholder="Ask anything…"
                 disabled={isLoading}
               />
             </div>
@@ -610,8 +867,8 @@ export default function App() {
               type="button"
               aria-label="Incognito mode"
               onClick={() => {
-                setIncognito(!incognito);
-                setcreateNewSession(!createNewSession);
+                // setIncognito(!incognito);
+                fetchChatHistory();
               }}
             >
               {incognito ? <EyeOff size={16} /> : <Eye size={16} />}
