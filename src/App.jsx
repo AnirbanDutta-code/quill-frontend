@@ -15,14 +15,13 @@ import Markdown from "react-markdown";
 
 // =======================================================================
 
-// const BASE = "https://quill-backend-0nt6.onrender.com";
-const BASE = "http://127.0.0.1:8000";
-
+const BASE = import.meta.env.VITE_BASE_URL 
 export default function App() {
   // ========== STATE MANAGEMENT ==========
   const [messages, setMessages] = useState([]);
   const [inputValue, setInputValue] = useState("");
   const [isLoading, setIsLoading] = useState(false);
+
   const [createNewSession, setCreateNewSession] = useState(true);
   const [currentChatId, setCurrentChatId] = useState(null);
   const [incognito, setIncognito] = useState(false);
